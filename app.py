@@ -5,7 +5,7 @@ from sentence_transformers import SentenceTransformer
 import streamlit.components.v1 as components
 
 # ======================
-# AUTH
+# AUTH (Simple demo only)
 # ======================
 
 USERS = {"admin": "1234", "veera": "ai2026"}
@@ -36,7 +36,6 @@ if not API_KEY:
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Auto-fallback models
 MODEL_LIST = [
     "mistralai/mistral-7b-instruct",
     "openai/gpt-3.5-turbo",
@@ -45,17 +44,36 @@ MODEL_LIST = [
 ]
 
 # ======================
-# SESSION STATE (CODE LAB)
+# PRODUCTION RULES
 # ======================
 
-if "current_step" not in st.session_state:
-    st.session_state.current_step = 0
+PRODUCTION_RULES = """
+You are generating enterprise-grade production code.
+
+Mandatory rules:
+- Use PostgreSQL (never SQLite)
+- Use JWT or OAuth2 (never HTTPBasic)
+- Use modular architecture
+- Use environment variables for secrets
+- Add logging
+- Add error handling
+- Use async where possible
+- Follow clean architecture
+Return clean, production-ready code only.
+"""
+
+# ======================
+# SESSION STATE
+# ======================
 
 if "generated_files" not in st.session_state:
     st.session_state.generated_files = {}
 
 if "project_architecture" not in st.session_state:
     st.session_state.project_architecture = None
+
+if "project_name" not in st.session_state:
+    st.session_state.project_name = ""
 
 # ======================
 # EMBEDDINGS
@@ -66,10 +84,6 @@ def load_embedder():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 embedder = load_embedder()
-
-# ======================
-# VECTOR MEMORY
-# ======================
 
 DIM = 384
 index = faiss.IndexFlatIP(DIM)
@@ -93,12 +107,10 @@ def search_memory(q, k=4):
     return "\n".join(doc_chunks[i] for i in ids[0])
 
 # ======================
-# SAFE AI CALL (AUTO FALLBACK)
+# SAFE AI CALL
 # ======================
 
 def call_ai(messages, max_tokens=800, retries=2):
-
-    # Trim very long prompts
     if len(messages[-1]["content"]) > 4000:
         messages[-1]["content"] = messages[-1]["content"][:4000]
 
@@ -111,9 +123,7 @@ def call_ai(messages, max_tokens=800, retries=2):
                     URL,
                     headers={
                         "Authorization": f"Bearer {API_KEY}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "http://localhost",
-                        "X-Title": "Veera Enterprise AI"
+                        "Content-Type": "application/json"
                     },
                     json={
                         "model": model,
@@ -122,12 +132,10 @@ def call_ai(messages, max_tokens=800, retries=2):
                     },
                     timeout=60
                 )
-
                 data = r.json()
 
                 if "choices" in data:
-                    reply = data["choices"][0]["message"]["content"]
-                    return f"🧠 ({model})\n{reply}"
+                    return data["choices"][0]["message"]["content"]
 
                 if "error" in data:
                     last_error = data["error"].get("message", str(data))
@@ -140,28 +148,88 @@ def call_ai(messages, max_tokens=800, retries=2):
     return f"❌ All AI models failed.\nLast error: {last_error}"
 
 # ======================
-# MULTI AGENT WORKFLOW
+# AGENTS
 # ======================
 
-AGENTS = {
-    "planner": "Break into steps",
-    "researcher": "Provide technical insights",
-    "architect": "Design scalable system",
-    "qa": "Find risks and gaps"
-}
+def architect_agent(project):
+    prompt = f"""
+Design an enterprise-grade architecture.
 
-def agent_workflow(q, context):
-    outputs = []
-    for role in AGENTS.values():
-        outputs.append(call_ai([
-            {"role": "system", "content": role},
-            {"role": "user", "content": context + "\n" + q}
-        ], max_tokens=400))
+Project:
+{project}
 
+Return:
+1. Folder structure
+2. Tech stack
+3. Main components
+"""
     return call_ai([
-        {"role": "system", "content": "Create enterprise-grade final solution"},
-        {"role": "user", "content": "\n".join(outputs)}
+        {"role": "system", "content": "You are a senior software architect."},
+        {"role": "user", "content": prompt}
     ], max_tokens=700)
+
+
+def developer_agent(project, architecture):
+    prompt = f"""
+Project:
+{project}
+
+Architecture:
+{architecture}
+
+Generate full production-ready code.
+Return files with clear separators:
+
+### filename.py
+<code>
+"""
+    return call_ai([
+        {"role": "system", "content": PRODUCTION_RULES},
+        {"role": "user", "content": prompt}
+    ], max_tokens=2000)
+
+
+def audit_project(code_text):
+    audit_prompt = f"""
+You are a senior production auditor.
+
+Evaluate:
+- Security
+- Scalability
+- Database choice
+- Authentication
+- Architecture
+
+Give:
+1. Score out of 10
+2. Issues
+3. Fix instructions
+
+Project code:
+{code_text}
+"""
+    return call_ai([
+        {"role": "system", "content": "You are a strict enterprise auditor."},
+        {"role": "user", "content": audit_prompt}
+    ], max_tokens=800)
+
+
+def auto_fix_project(code_text, audit_text):
+    fix_prompt = f"""
+Fix the following issues.
+
+Audit:
+{audit_text}
+
+Project:
+{code_text}
+
+Return improved production-grade code.
+"""
+    return call_ai([
+        {"role": "system", "content": PRODUCTION_RULES},
+        {"role": "user", "content": fix_prompt}
+    ], max_tokens=2000)
 
 # ======================
 # VOICE
@@ -174,24 +242,6 @@ def speak(text):
     speechSynthesis.speak(msg);
     </script>
     """, height=0)
-
-# ======================
-# CODE LAB HELPERS
-# ======================
-
-FILE_ORDER = [
-    "database.py",
-    "auth.py",
-    "booking_engine.py",
-    "seat_management.py",
-    "payment.py",
-    "admin.py",
-    "app.py"
-]
-
-def next_file():
-    idx = st.session_state.current_step - 1
-    return FILE_ORDER[idx] if idx < len(FILE_ORDER) else None
 
 # ======================
 # UI
@@ -209,99 +259,77 @@ tabs = st.tabs([
 ])
 
 # ---------- AI CHAT ----------
-
 with tabs[0]:
-    if "chat" not in st.session_state:
-        st.session_state.chat = []
-
-    for m in st.session_state.chat:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
-
-    q = st.chat_input("Ask anything...")
+    q = st.text_input("Ask anything")
     if q:
         mem = search_memory(q)
-        ans = agent_workflow(q, mem)
-        st.session_state.chat += [
-            {"role": "user", "content": q},
-            {"role": "assistant", "content": ans}
-        ]
-        st.rerun()
+        ans = call_ai([
+            {"role": "system", "content": "You are an AI assistant."},
+            {"role": "user", "content": mem + "\n" + q}
+        ])
+        st.markdown(ans)
 
 # ---------- DOCUMENT MEMORY ----------
-
 with tabs[1]:
     f = st.file_uploader("Upload PDF", type="pdf")
     if f:
         text = "".join(p.extract_text() for p in PdfReader(f).pages if p.extract_text())
         add_to_memory(text)
-        st.success("📚 Document stored in AI memory")
+        st.success("Document stored")
 
 # ---------- VOICE ----------
-
 with tabs[2]:
     vq = st.text_input("Ask for voice reply")
     if vq:
-        mem = search_memory(vq)
-        ans = agent_workflow(vq, mem)
+        ans = call_ai([
+            {"role": "user", "content": vq}
+        ])
         st.markdown(ans)
         speak(ans)
 
 # ---------- AUTOMATION ----------
-
 with tabs[3]:
-    task = st.text_area("Describe task for AI agents")
-    if st.button("Run Automation"):
-        mem = search_memory(task)
-        res = agent_workflow(task, mem)
+    task = st.text_area("Describe task")
+    if st.button("Run"):
+        res = call_ai([
+            {"role": "system", "content": "Multi-agent automation."},
+            {"role": "user", "content": task}
+        ])
         st.markdown(res)
 
 # ---------- CODE LAB ----------
-
 with tabs[4]:
-    st.subheader("💻 Token-Safe Multi-Agent Code Lab")
+    st.subheader("💻 Enterprise Code Lab")
 
-    project = st.text_area(
-        "Describe project once",
-        placeholder="Build production-ready bus booking system like RedBus"
-    )
+    project = st.text_area("Describe your project")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    if st.button("1️⃣ Generate Architecture"):
+        arch = architect_agent(project)
+        st.session_state.project_architecture = arch
+        st.markdown(arch)
 
-    with c1:
-        if st.button("🧱 Architecture"):
-            if st.session_state.current_step > 0:
-                st.info("Architecture already generated")
-            else:
-                arch = call_ai([
-                    {"role": "system", "content": "You are a senior software architect"},
-                    {"role": "user", "content": project + "\nCreate folder structure only"}
-                ], max_tokens=600)
-                st.session_state.project_architecture = arch
-                st.session_state.current_step = 1
-                st.code(arch)
+    if st.button("2️⃣ Generate Code"):
+        if not st.session_state.project_architecture:
+            st.warning("Generate architecture first")
+        else:
+            code = developer_agent(project, st.session_state.project_architecture)
+            st.session_state.generated_files["project"] = code
+            st.code(code)
 
-    with c2:
-        if st.button("📄 Next File"):
-            if st.session_state.current_step == 0:
-                st.warning("Generate architecture first")
-            else:
-                file = next_file()
-                if not file:
-                    st.info("All files generated")
-                elif file in st.session_state.generated_files:
-                    st.info(f"{file} already exists")
-                else:
-                    code = call_ai([
-                        {"role": "system", "content": "Write clean production-ready Python code"},
-                        {"role": "user", "content": f"Generate ONLY {file} for:\n{project}"}
-                    ], max_tokens=1200)
-                    st.session_state.generated_files[file] = code
-                    st.session_state.current_step += 1
-                    st.code(code, language="python")
+    if st.button("3️⃣ Audit Project"):
+        if "project" in st.session_state.generated_files:
+            code = st.session_state.generated_files["project"]
+            audit = audit_project(code)
+            st.session_state.audit = audit
+            st.markdown(audit)
+
+    if st.button("4️⃣ Auto Fix to 100%"):
+        if "audit" in st.session_state:
+            code = st.session_state.generated_files["project"]
+            fixed = auto_fix_project(code, st.session_state.audit)
+            st.code(fixed)
 
 # ---------- LOGOUT ----------
-
 if st.sidebar.button("Logout"):
     st.session_state.clear()
     st.rerun()
