@@ -1,9 +1,8 @@
 streamlit
 requests
+numpy<2.0
+torch
 faiss-cpu
 sentence-transformers
 pypdf
-numpy<2.0
-torch
-transformers
 plotly
