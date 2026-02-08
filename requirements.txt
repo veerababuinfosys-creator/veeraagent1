@@ -1,0 +1,9 @@
+streamlit==1.32.2
+requests==2.31.0
+faiss-cpu==1.7.4
+sentence-transformers==2.6.1
+pypdf==4.2.0
+numpy==1.26.4
+torch==2.2.2
+transformers==4.40.2
+plotly==5.20.0
