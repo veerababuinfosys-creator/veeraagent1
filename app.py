@@ -1,5 +1,5 @@
 import streamlit as st
-import requests, os, time, faiss, numpy as np, logging
+import requests, os, time, faiss, numpy as np, logging, tempfile, zipfile
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 import streamlit.components.v1 as components
@@ -10,7 +10,7 @@ import streamlit.components.v1 as components
 logging.basicConfig(level=logging.INFO)
 
 # ======================
-# AUTH (Simple demo only)
+# AUTH
 # ======================
 USERS = {"admin": "1234", "veera": "ai2026"}
 
@@ -38,31 +38,7 @@ if not API_KEY:
     st.stop()
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
-
-# Stable model fallback list (no :free suffix)
-MODEL_LIST = [
-    "meta-llama/llama-3-70b-instruct",
-    "meta-llama/llama-3-8b-instruct",
-    "mistralai/mistral-7b-instruct"
-]
-
-# ======================
-# PRODUCTION RULES
-# ======================
-PRODUCTION_RULES = """
-You are generating enterprise-grade production code.
-
-Mandatory rules:
-- Use PostgreSQL (never SQLite)
-- Use JWT or OAuth2 (never HTTPBasic)
-- Use modular architecture
-- Use environment variables for secrets
-- Add logging
-- Add error handling
-- Use async where possible
-- Follow clean architecture
-Return clean, production-ready code only.
-"""
+MODEL = "meta-llama/llama-3-8b-instruct"  # single stable model
 
 # ======================
 # EMBEDDINGS
@@ -74,8 +50,9 @@ def load_embedder():
 embedder = load_embedder()
 
 DIM = 384
-index = faiss.IndexFlatIP(DIM)
-doc_chunks = []
+if "index" not in st.session_state:
+    st.session_state.index = faiss.IndexFlatIP(DIM)
+    st.session_state.doc_chunks = []
 
 def chunk_text(text, size=400, overlap=60):
     words = text.split()
@@ -84,172 +61,235 @@ def chunk_text(text, size=400, overlap=60):
 def add_to_memory(text):
     chunks = chunk_text(text)
     vecs = embedder.encode(chunks, normalize_embeddings=True)
-    index.add(vecs.astype("float32"))
-    doc_chunks.extend(chunks)
+    st.session_state.index.add(vecs.astype("float32"))
+    st.session_state.doc_chunks.extend(chunks)
 
 def search_memory(q, k=4):
-    if index.ntotal == 0:
+    if st.session_state.index.ntotal == 0:
         return ""
     qv = embedder.encode([q], normalize_embeddings=True).astype("float32")
-    _, ids = index.search(qv, k)
-    return "\n".join(doc_chunks[i] for i in ids[0] if i < len(doc_chunks))
+    _, ids = st.session_state.index.search(qv, k)
+    return "\n".join(
+        st.session_state.doc_chunks[i]
+        for i in ids[0]
+        if i < len(st.session_state.doc_chunks)
+    )
 
 # ======================
-# SAFE AI CALL WITH FALLBACK
+# AI CALL
 # ======================
-def call_ai(messages, max_tokens=800, retries=2):
-    last_error = "Unknown error"
+def call_ai(messages, max_tokens=800):
+    try:
+        r = requests.post(
+            URL,
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": MODEL,
+                "messages": messages,
+                "max_tokens": max_tokens
+            },
+            timeout=60
+        )
+        data = r.json()
 
-    for model in MODEL_LIST:
-        for _ in range(retries):
-            try:
-                r = requests.post(
-                    URL,
-                    headers={
-                        "Authorization": f"Bearer {API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "max_tokens": max_tokens
-                    },
-                    timeout=60
-                )
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"]
 
-                data = r.json()
+        if "error" in data:
+            return f"❌ AI Error: {data['error'].get('message')}"
 
-                if "choices" in data:
-                    return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"❌ Request failed: {str(e)}"
 
-                if "error" in data:
-                    last_error = data["error"].get("message", str(data))
-                    logging.warning(f"{model} failed: {last_error}")
-                    break
-
-            except Exception as e:
-                last_error = str(e)
-                logging.warning(f"{model} exception: {last_error}")
-                time.sleep(1)
-
-    return f"❌ All AI models failed.\nLast error: {last_error}"
+    return "❌ Unknown AI error"
 
 # ======================
-# AGENTS (4-AGENT SYSTEM)
+# PRODUCTION RULES
 # ======================
-def architect_agent(project):
-    prompt = f"""
-Design an enterprise-grade architecture.
-
-Project:
-{project}
-
-Return:
-1. Folder structure
-2. Tech stack
-3. Main components
+PRODUCTION_RULES = """
+You are generating enterprise-grade production code.
+- Use PostgreSQL
+- Use JWT/OAuth2
+- Modular architecture
+- Env variables for secrets
+- Logging and error handling
 """
-    return call_ai([
-        {"role": "system", "content": "You are a senior software architect."},
-        {"role": "user", "content": prompt}
-    ], max_tokens=700)
 
+# ======================
+# 4 AGENTS
+# ======================
+def architect_agent(project, memory=""):
+    prompt = f"Context:\n{memory}\n\nProject:\n{project}\n\nDesign architecture."
+    return call_ai([
+        {"role": "system", "content": "You are a senior architect."},
+        {"role": "user", "content": prompt}
+    ], 700)
 
 def developer_agent(project, architecture):
-    prompt = f"""
-Project:
-{project}
-
-Architecture:
-{architecture}
-
-Generate full production-ready code.
-Return files with clear separators:
-
-### filename.py
-<code>
-"""
+    prompt = f"Project:\n{project}\nArchitecture:\n{architecture}\nGenerate code."
     return call_ai([
         {"role": "system", "content": PRODUCTION_RULES},
         {"role": "user", "content": prompt}
-    ], max_tokens=2000)
-
+    ], 2000)
 
 def audit_project(code_text):
-    audit_prompt = f"""
-You are a senior production auditor.
-
-Evaluate:
-- Security
-- Scalability
-- Database choice
-- Authentication
-- Architecture
-
-Give:
-1. Score out of 10
-2. Issues
-3. Fix instructions
-
-Project code:
-{code_text}
-"""
+    prompt = f"Audit this project and score it:\n{code_text}"
     return call_ai([
-        {"role": "system", "content": "You are a strict enterprise auditor."},
-        {"role": "user", "content": audit_prompt}
-    ], max_tokens=800)
-
+        {"role": "system", "content": "You are a strict auditor."},
+        {"role": "user", "content": prompt}
+    ], 800)
 
 def auto_fix_project(code_text, audit_text):
-    fix_prompt = f"""
-Fix the following issues.
-
-Audit:
-{audit_text}
-
-Project:
-{code_text}
-
-Return improved production-grade code.
-"""
+    prompt = f"Fix issues.\nAudit:\n{audit_text}\nProject:\n{code_text}"
     return call_ai([
         {"role": "system", "content": PRODUCTION_RULES},
-        {"role": "user", "content": fix_prompt}
-    ], max_tokens=2000)
+        {"role": "user", "content": prompt}
+    ], 2000)
+
+# ======================
+# PROJECT ZIP
+# ======================
+def create_project_zip(code):
+    temp_dir = tempfile.mkdtemp()
+    app_path = os.path.join(temp_dir, "app.py")
+    with open(app_path, "w") as f:
+        f.write(code)
+
+    zip_path = os.path.join(temp_dir, "project.zip")
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        zipf.write(app_path, "app.py")
+    return zip_path
+
+# ======================
+# VOICE
+# ======================
+def speak_browser(text):
+    components.html(f"""
+    <script>
+    const msg = new SpeechSynthesisUtterance({repr(text)});
+    window.speechSynthesis.speak(msg);
+    </script>
+    """, height=0)
 
 # ======================
 # UI
 # ======================
-st.set_page_config("VeeraAgent1", layout="wide")
-st.title("🚀 VeeraAgent1 – 4-Agent AI Code Platform")
+st.set_page_config("Veera Enterprise AI", layout="wide")
+st.title("🚀 Veera Enterprise AI Platform")
 
-project = st.text_area("Describe your project")
+tabs = st.tabs([
+    "💬 AI Chat",
+    "🧠 Project Builder",
+    "📄 Document Memory",
+    "⚙️ Automation",
+    "🧠 Project Generator"
+])
 
-if st.button("1️⃣ Generate Architecture"):
-    arch = architect_agent(project)
-    st.session_state.arch = arch
-    st.markdown(arch)
+# ======================
+# AI CHAT
+# ======================
+with tabs[0]:
+    if "chat" not in st.session_state:
+        st.session_state.chat = []
 
-if st.button("2️⃣ Generate Code"):
-    if "arch" not in st.session_state:
-        st.warning("Generate architecture first")
-    else:
-        code = developer_agent(project, st.session_state.arch)
-        st.session_state.code = code
+    for m in st.session_state.chat:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    q = st.chat_input("Ask anything...")
+    if q:
+        mem = search_memory(q)
+        ans = call_ai([
+            {"role": "system", "content": "You are a helpful enterprise AI."},
+            {"role": "user", "content": mem + "\n" + q}
+        ])
+        st.session_state.chat += [
+            {"role": "user", "content": q},
+            {"role": "assistant", "content": ans}
+        ]
+        st.rerun()
+
+# ======================
+# PROJECT BUILDER
+# ======================
+with tabs[1]:
+    project = st.text_area("Describe your project")
+
+    if st.button("1️⃣ Generate Architecture"):
+        memory = search_memory(project)
+        arch = architect_agent(project, memory)
+        st.session_state.arch = arch
+        st.markdown(arch)
+
+    if st.button("2️⃣ Generate Code"):
+        if "arch" in st.session_state:
+            code = developer_agent(project, st.session_state.arch)
+            st.session_state.code = code
+            st.code(code)
+
+    if st.button("3️⃣ Audit"):
+        if "code" in st.session_state:
+            audit = audit_project(st.session_state.code)
+            st.session_state.audit = audit
+            st.markdown(audit)
+
+    if st.button("4️⃣ Auto Fix"):
+        if "audit" in st.session_state:
+            fixed = auto_fix_project(st.session_state.code, st.session_state.audit)
+            st.code(fixed)
+
+# ======================
+# MEMORY
+# ======================
+with tabs[2]:
+    f = st.file_uploader("Upload PDF", type="pdf")
+    if f:
+        text = "".join(
+            p.extract_text() for p in PdfReader(f).pages if p.extract_text()
+        )
+        add_to_memory(text)
+        st.success("Document stored")
+
+# ======================
+# AUTOMATION
+# ======================
+with tabs[3]:
+    task = st.text_area("Describe task")
+    if st.button("Run Automation"):
+        mem = search_memory(task)
+        result = call_ai([
+            {"role": "system", "content": "You are an automation AI."},
+            {"role": "user", "content": mem + "\n" + task}
+        ])
+        st.markdown(result)
+
+# ======================
+# PROJECT GENERATOR
+# ======================
+with tabs[4]:
+    idea = st.text_area("Describe project idea")
+    if st.button("Generate Project"):
+        code = call_ai([
+            {"role": "system", "content": PRODUCTION_RULES},
+            {"role": "user", "content": idea}
+        ], 2000)
+
+        zip_path = create_project_zip(code)
         st.code(code)
 
-if st.button("3️⃣ Audit Project"):
-    if "code" in st.session_state:
-        audit = audit_project(st.session_state.code)
-        st.session_state.audit = audit
-        st.markdown(audit)
+        with open(zip_path, "rb") as f:
+            st.download_button(
+                "⬇️ Download Project",
+                data=f,
+                file_name="project.zip"
+            )
 
-if st.button("4️⃣ Auto Fix"):
-    if "audit" in st.session_state:
-        fixed = auto_fix_project(st.session_state.code, st.session_state.audit)
-        st.code(fixed)
-
+# ======================
 # LOGOUT
+# ======================
 if st.sidebar.button("Logout"):
     st.session_state.clear()
     st.rerun()
