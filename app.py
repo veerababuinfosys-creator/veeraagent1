@@ -36,11 +36,12 @@ if not API_KEY:
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# FREE MODEL LIST ONLY
 MODEL_LIST = [
-    "mistralai/mistral-7b-instruct",
-    "openai/gpt-3.5-turbo",
-    "meta-llama/llama-3-8b-instruct",
-    "nousresearch/nous-hermes-2-mistral-7b"
+    "openrouter/auto",
+    "mistralai/mistral-7b-instruct:free",
+    "meta-llama/llama-3-8b-instruct:free",
+    "nousresearch/nous-hermes-2-mistral-7b:free"
 ]
 
 # ======================
@@ -61,19 +62,6 @@ Mandatory rules:
 - Follow clean architecture
 Return clean, production-ready code only.
 """
-
-# ======================
-# SESSION STATE
-# ======================
-
-if "generated_files" not in st.session_state:
-    st.session_state.generated_files = {}
-
-if "project_architecture" not in st.session_state:
-    st.session_state.project_architecture = None
-
-if "project_name" not in st.session_state:
-    st.session_state.project_name = ""
 
 # ======================
 # EMBEDDINGS
@@ -107,7 +95,7 @@ def search_memory(q, k=4):
     return "\n".join(doc_chunks[i] for i in ids[0])
 
 # ======================
-# SAFE AI CALL
+# SAFE AI CALL (FREE MODEL FALLBACK)
 # ======================
 
 def call_ai(messages, max_tokens=800, retries=2):
@@ -145,10 +133,10 @@ def call_ai(messages, max_tokens=800, retries=2):
                 last_error = str(e)
                 time.sleep(1)
 
-    return f"❌ All AI models failed.\nLast error: {last_error}"
+    return f"❌ All free AI models failed.\nLast error: {last_error}"
 
 # ======================
-# AGENTS
+# AGENTS (4-AGENT SYSTEM)
 # ======================
 
 def architect_agent(project):
@@ -232,104 +220,39 @@ Return improved production-grade code.
     ], max_tokens=2000)
 
 # ======================
-# VOICE
-# ======================
-
-def speak(text):
-    components.html(f"""
-    <script>
-    const msg = new SpeechSynthesisUtterance({repr(text)});
-    speechSynthesis.speak(msg);
-    </script>
-    """, height=0)
-
-# ======================
 # UI
 # ======================
 
-st.set_page_config("Veera Enterprise AI Platform", layout="wide")
-st.title("🚀 Veera Enterprise AI Platform")
+st.set_page_config("VeeraAgent1", layout="wide")
+st.title("🚀 VeeraAgent1 – 4-Agent AI Code Platform")
 
-tabs = st.tabs([
-    "💬 AI Chat",
-    "📄 Document Memory",
-    "🎤 Voice Reply",
-    "⚙️ Automation",
-    "💻 Code Lab"
-])
+project = st.text_area("Describe your project")
 
-# ---------- AI CHAT ----------
-with tabs[0]:
-    q = st.text_input("Ask anything")
-    if q:
-        mem = search_memory(q)
-        ans = call_ai([
-            {"role": "system", "content": "You are an AI assistant."},
-            {"role": "user", "content": mem + "\n" + q}
-        ])
-        st.markdown(ans)
+if st.button("1️⃣ Generate Architecture"):
+    arch = architect_agent(project)
+    st.session_state.arch = arch
+    st.markdown(arch)
 
-# ---------- DOCUMENT MEMORY ----------
-with tabs[1]:
-    f = st.file_uploader("Upload PDF", type="pdf")
-    if f:
-        text = "".join(p.extract_text() for p in PdfReader(f).pages if p.extract_text())
-        add_to_memory(text)
-        st.success("Document stored")
+if st.button("2️⃣ Generate Code"):
+    if "arch" not in st.session_state:
+        st.warning("Generate architecture first")
+    else:
+        code = developer_agent(project, st.session_state.arch)
+        st.session_state.code = code
+        st.code(code)
 
-# ---------- VOICE ----------
-with tabs[2]:
-    vq = st.text_input("Ask for voice reply")
-    if vq:
-        ans = call_ai([
-            {"role": "user", "content": vq}
-        ])
-        st.markdown(ans)
-        speak(ans)
+if st.button("3️⃣ Audit Project"):
+    if "code" in st.session_state:
+        audit = audit_project(st.session_state.code)
+        st.session_state.audit = audit
+        st.markdown(audit)
 
-# ---------- AUTOMATION ----------
-with tabs[3]:
-    task = st.text_area("Describe task")
-    if st.button("Run"):
-        res = call_ai([
-            {"role": "system", "content": "Multi-agent automation."},
-            {"role": "user", "content": task}
-        ])
-        st.markdown(res)
+if st.button("4️⃣ Auto Fix"):
+    if "audit" in st.session_state:
+        fixed = auto_fix_project(st.session_state.code, st.session_state.audit)
+        st.code(fixed)
 
-# ---------- CODE LAB ----------
-with tabs[4]:
-    st.subheader("💻 Enterprise Code Lab")
-
-    project = st.text_area("Describe your project")
-
-    if st.button("1️⃣ Generate Architecture"):
-        arch = architect_agent(project)
-        st.session_state.project_architecture = arch
-        st.markdown(arch)
-
-    if st.button("2️⃣ Generate Code"):
-        if not st.session_state.project_architecture:
-            st.warning("Generate architecture first")
-        else:
-            code = developer_agent(project, st.session_state.project_architecture)
-            st.session_state.generated_files["project"] = code
-            st.code(code)
-
-    if st.button("3️⃣ Audit Project"):
-        if "project" in st.session_state.generated_files:
-            code = st.session_state.generated_files["project"]
-            audit = audit_project(code)
-            st.session_state.audit = audit
-            st.markdown(audit)
-
-    if st.button("4️⃣ Auto Fix to 100%"):
-        if "audit" in st.session_state:
-            code = st.session_state.generated_files["project"]
-            fixed = auto_fix_project(code, st.session_state.audit)
-            st.code(fixed)
-
-# ---------- LOGOUT ----------
+# LOGOUT
 if st.sidebar.button("Logout"):
     st.session_state.clear()
     st.rerun()
