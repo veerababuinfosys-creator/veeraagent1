@@ -30,15 +30,15 @@ if "user" not in st.session_state:
     st.stop()
 
 # ======================
-# CONFIG
+# CONFIG (GROK API)
 # ======================
-API_KEY = os.getenv("OPENROUTER_API_KEY")
+API_KEY = os.getenv("GROK_API_KEY")
 if not API_KEY:
-    st.error("Missing OPENROUTER_API_KEY")
+    st.error("Missing GROK_API_KEY")
     st.stop()
 
-URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "meta-llama/llama-3-8b-instruct"  # single stable model
+URL = "https://api.x.ai/v1/chat/completions"
+MODEL = "grok-2-mini"
 
 # ======================
 # EMBEDDINGS
@@ -76,7 +76,7 @@ def search_memory(q, k=4):
     )
 
 # ======================
-# AI CALL
+# AI CALL (GROK)
 # ======================
 def call_ai(messages, max_tokens=800):
     try:
@@ -93,6 +93,7 @@ def call_ai(messages, max_tokens=800):
             },
             timeout=60
         )
+
         data = r.json()
 
         if "choices" in data:
