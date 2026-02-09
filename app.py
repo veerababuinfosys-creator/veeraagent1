@@ -1,13 +1,17 @@
 import streamlit as st
-import requests, os, time, faiss, numpy as np
+import requests, os, time, faiss, numpy as np, logging
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 import streamlit.components.v1 as components
 
 # ======================
+# LOGGING
+# ======================
+logging.basicConfig(level=logging.INFO)
+
+# ======================
 # AUTH (Simple demo only)
 # ======================
-
 USERS = {"admin": "1234", "veera": "ai2026"}
 
 def login():
@@ -28,7 +32,6 @@ if "user" not in st.session_state:
 # ======================
 # CONFIG
 # ======================
-
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 if not API_KEY:
     st.error("Missing OPENROUTER_API_KEY")
@@ -36,18 +39,16 @@ if not API_KEY:
 
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# FREE MODEL LIST ONLY
+# Stable model fallback list (no :free suffix)
 MODEL_LIST = [
-    "openrouter/auto",
-    "mistralai/mistral-7b-instruct:free",
-    "meta-llama/llama-3-8b-instruct:free",
-    "nousresearch/nous-hermes-2-mistral-7b:free"
+    "meta-llama/llama-3-70b-instruct",
+    "meta-llama/llama-3-8b-instruct",
+    "mistralai/mistral-7b-instruct"
 ]
 
 # ======================
 # PRODUCTION RULES
 # ======================
-
 PRODUCTION_RULES = """
 You are generating enterprise-grade production code.
 
@@ -66,7 +67,6 @@ Return clean, production-ready code only.
 # ======================
 # EMBEDDINGS
 # ======================
-
 @st.cache_resource
 def load_embedder():
     return SentenceTransformer("all-MiniLM-L6-v2")
@@ -92,16 +92,12 @@ def search_memory(q, k=4):
         return ""
     qv = embedder.encode([q], normalize_embeddings=True).astype("float32")
     _, ids = index.search(qv, k)
-    return "\n".join(doc_chunks[i] for i in ids[0])
+    return "\n".join(doc_chunks[i] for i in ids[0] if i < len(doc_chunks))
 
 # ======================
-# SAFE AI CALL (FREE MODEL FALLBACK)
+# SAFE AI CALL WITH FALLBACK
 # ======================
-
 def call_ai(messages, max_tokens=800, retries=2):
-    if len(messages[-1]["content"]) > 4000:
-        messages[-1]["content"] = messages[-1]["content"][:4000]
-
     last_error = "Unknown error"
 
     for model in MODEL_LIST:
@@ -120,6 +116,7 @@ def call_ai(messages, max_tokens=800, retries=2):
                     },
                     timeout=60
                 )
+
                 data = r.json()
 
                 if "choices" in data:
@@ -127,18 +124,19 @@ def call_ai(messages, max_tokens=800, retries=2):
 
                 if "error" in data:
                     last_error = data["error"].get("message", str(data))
+                    logging.warning(f"{model} failed: {last_error}")
                     break
 
             except Exception as e:
                 last_error = str(e)
+                logging.warning(f"{model} exception: {last_error}")
                 time.sleep(1)
 
-    return f"❌ All free AI models failed.\nLast error: {last_error}"
+    return f"❌ All AI models failed.\nLast error: {last_error}"
 
 # ======================
 # AGENTS (4-AGENT SYSTEM)
 # ======================
-
 def architect_agent(project):
     prompt = f"""
 Design an enterprise-grade architecture.
@@ -222,7 +220,6 @@ Return improved production-grade code.
 # ======================
 # UI
 # ======================
-
 st.set_page_config("VeeraAgent1", layout="wide")
 st.title("🚀 VeeraAgent1 – 4-Agent AI Code Platform")
 
